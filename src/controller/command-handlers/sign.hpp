@@ -45,7 +45,7 @@ private:
         const std::vector<CardCertificateAndPinInfo>& cardCertAndPinInfos) override;
     void validateAndStoreDocHashAndHashAlgo(const QVariantMap& args);
 
-    QByteArray docHash;
+    QVector<QByteArray> docHashes;
     electronic_id::HashAlgorithm hashAlgo;
     QByteArray userEidCertificateFromArgs;
 };

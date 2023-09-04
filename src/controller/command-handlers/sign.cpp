@@ -96,36 +96,47 @@ void Sign::emitCertificatesReady(const std::vector<CardCertificateAndPinInfo>& c
 QVariantMap Sign::onConfirm(WebEidUI* window, const CardCertificateAndPinInfo& cardCertAndPin)
 {
     auto pin = getPin(cardCertAndPin.cardInfo->eid().smartcard(), window);
+    QVariantMap resultMap;
+    QStringList signaturesStringList;
 
-    try {
-        const auto signature = signHash(cardCertAndPin.cardInfo->eid(), pin, docHash, hashAlgo);
+    for(const QByteArray& currentDocHash : docHashes) {  // Process each hash in docHashes
+        try {
+            const auto signature = signHash(cardCertAndPin.cardInfo->eid(), pin, currentDocHash, hashAlgo);
+            
+            // Here, we're appending each signature to the string list.
+            signaturesStringList.append(signature.first);
 
-        // Erase PIN memory.
-        // TODO: Use a scope guard. Verify that the buffers are actually zeroed
-        // and no copies remain.
-        std::fill(pin.begin(), pin.end(), '\0');
+            // Assuming the signature algorithm remains constant for all hashes, 
+            // we store it once in the resultMap.
+            if (!resultMap.contains(QStringLiteral("signatureAlgorithm"))) {
+                resultMap.insert(QStringLiteral("signatureAlgorithm"), signature.second);
+            }
 
-        return {{QStringLiteral("signature"), signature.first},
-                {QStringLiteral("signatureAlgorithm"), signature.second}};
-
-    } catch (const VerifyPinFailed& failure) {
-        switch (failure.status()) {
-        case electronic_id::VerifyPinFailed::Status::PIN_ENTRY_CANCEL:
-        case electronic_id::VerifyPinFailed::Status::PIN_ENTRY_TIMEOUT:
-            break;
-        case electronic_id::VerifyPinFailed::Status::PIN_ENTRY_DISABLED:
-            emit retry(RetriableError::PIN_VERIFY_DISABLED);
-            break;
-        default:
-            emit verifyPinFailed(failure.status(), failure.retries());
+        } catch (const VerifyPinFailed& failure) {
+            switch (failure.status()) {
+            case electronic_id::VerifyPinFailed::Status::PIN_ENTRY_CANCEL:
+            case electronic_id::VerifyPinFailed::Status::PIN_ENTRY_TIMEOUT:
+                break;
+            case electronic_id::VerifyPinFailed::Status::PIN_ENTRY_DISABLED:
+                emit retry(RetriableError::PIN_VERIFY_DISABLED);
+                break;
+            default:
+                emit verifyPinFailed(failure.status(), failure.retries());
+            }
+            // Retries > 0 means that there are retries remaining,
+            // < 0 means that retry count is unknown, == 0 means that the PIN is blocked.
+            if (failure.retries() != 0) {
+                throw CommandHandlerVerifyPinFailed(failure.what());
+            }
+            throw;
         }
-        // Retries > 0 means that there are retries remaining,
-        // < 0 means that retry count is unknown, == 0 means that the PIN is blocked.
-        if (failure.retries() != 0) {
-            throw CommandHandlerVerifyPinFailed(failure.what());
-        }
-        throw;
     }
+
+    // Insert the signatures as a comma-separated string under the key `signature`
+    resultMap.insert(QStringLiteral("signature"), signaturesStringList.join(","));
+
+    std::fill(pin.begin(), pin.end(), '\0');
+    return resultMap;
 }
 
 void Sign::connectSignals(const WebEidUI* window)
@@ -139,18 +150,23 @@ void Sign::connectSignals(const WebEidUI* window)
 
 void Sign::validateAndStoreDocHashAndHashAlgo(const QVariantMap& args)
 {
-    docHash =
-        QByteArray::fromBase64(validateAndGetArgument<QByteArray>(QStringLiteral("hash"), args));
+    QString hashString = validateAndGetArgument<QString>(QStringLiteral("hash"), args);
+    QStringList hashes = hashString.split(',');
 
-    QString hashAlgoInput = validateAndGetArgument<QString>(QStringLiteral("hashFunction"), args);
-    if (hashAlgoInput.size() > 8) {
-        THROW(CommandHandlerInputDataError, "hashFunction value is invalid");
-    }
-    hashAlgo = HashAlgorithm(hashAlgoInput.toStdString());
+    foreach(const QString& hash, hashes) {
+        QByteArray currentDocHash = QByteArray::fromBase64(hash.toUtf8());
+        docHashes.append(currentDocHash);  // Store each hash
 
-    if (docHash.length() != int(hashAlgo.hashByteLength())) {
-        THROW(CommandHandlerInputDataError,
-              std::string(hashAlgo) + " hash must be " + std::to_string(hashAlgo.hashByteLength())
-                  + " bytes long, but is " + std::to_string(docHash.length()) + " instead");
+        QString hashAlgoInput = validateAndGetArgument<QString>(QStringLiteral("hashFunction"), args);
+        if (hashAlgoInput.size() > 8) {
+            THROW(CommandHandlerInputDataError, "hashFunction value is invalid");
+        }
+        hashAlgo = HashAlgorithm(hashAlgoInput.toStdString());
+
+        if (currentDocHash.length() != int(hashAlgo.hashByteLength())) {
+            THROW(CommandHandlerInputDataError,
+                std::string(hashAlgo) + " hash must be " + std::to_string(hashAlgo.hashByteLength())
+                    + " bytes long, but is " + std::to_string(currentDocHash.length()) + " instead");
+        }
     }
 }
