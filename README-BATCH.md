@@ -337,7 +337,7 @@ https://github.com/mrts/docker-qt-cmake-gtest-valgrind-ubuntu/blob/master/Docker
 
 ## Building and testing
 
-    git clone --recurse-submodules git@github.com:web-eid/web-eid-app.git
+    git clone --recurse-submodules git@github.com:madismeer/web-eid-app.git
     cd web-eid-app
     ./build.sh
     ./test.sh
